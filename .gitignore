@@ -1,0 +1,27 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache / build artifacts
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Local outputs and generated files
+output/
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+
+
+images/
+music/
+output/
