@@ -30,7 +30,7 @@
       z-index: 10;
     }
 
-    #overlay input {
+    #overlay input, #overlay select {
       background: #222;
       border: 1px solid #444;
       color: #fff;
@@ -123,6 +123,7 @@
 <body>
   <div id="overlay">
     <input id="url" type="text" value="https://unexecuting-scholiastic-lloyd.ngrok-free.dev/frame" spellcheck="false" />
+    <select id="camera-select"><option value="">Loading cameras...</option></select>
     <button id="btn-start">Start</button>
   </div>
 
@@ -148,7 +149,20 @@
 
     let intervalId = null;
     let sent = 0;
-    let serverUrl = '';
+
+    async function loadCameras() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter(d => d.kind === 'videoinput');
+      const sel = document.getElementById('camera-select');
+      sel.innerHTML = cameras.map((c, i) =>
+        `<option value="${c.deviceId}">${c.label || 'Camera ' + (i + 1)}</option>`
+      ).join('');
+    }
+
+    // Request permission once so labels are populated
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(s => { s.getTracks().forEach(t => t.stop()); loadCameras(); })
+      .catch(() => loadCameras());
 
     async function sendFrame() {
       canvas.width  = video.videoWidth;
@@ -172,14 +186,17 @@
     }
 
     btnStart.addEventListener('click', async () => {
+      const deviceId = document.getElementById('camera-select').value;
+      const constraints = deviceId
+        ? { video: { deviceId: { exact: deviceId } }, audio: false }
+        : { video: true, audio: false };
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = stream;
         await video.play();
       } catch { alert('Camera denied'); return; }
 
-      serverUrl = document.getElementById('url').value.trim();
-      document.getElementById('url-live').value = serverUrl;
+      document.getElementById('url-live').value = document.getElementById('url').value.trim();
       sent = 0;
       const ms = Math.round(1000 / (parseInt(document.getElementById('fps').value) || 10));
       intervalId = setInterval(sendFrame, ms);
