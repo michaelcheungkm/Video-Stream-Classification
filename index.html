@@ -81,6 +81,16 @@
       width: 40px;
     }
 
+    #url-live {
+      background: #222;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 3px 6px;
+      font-family: monospace;
+      font-size: 12px;
+      width: 180px;
+    }
+
     #btn-stop {
       font-family: monospace;
       font-size: 12px;
@@ -121,6 +131,7 @@
 
   <div id="bar">
     <button id="btn-stop">Stop</button>
+    <input id="url-live" type="text" spellcheck="false" />
     <input id="fps" type="number" min="1" max="30" value="10" />
     <span id="status">streaming</span>
   </div>
@@ -149,7 +160,7 @@
 
       const b64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
       try {
-        await fetch(serverUrl, {
+        await fetch(document.getElementById('url-live').value.trim(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ frame: b64 }),
@@ -168,6 +179,7 @@
       } catch { alert('Camera denied'); return; }
 
       serverUrl = document.getElementById('url').value.trim();
+      document.getElementById('url-live').value = serverUrl;
       sent = 0;
       const ms = Math.round(1000 / (parseInt(document.getElementById('fps').value) || 10));
       intervalId = setInterval(sendFrame, ms);
