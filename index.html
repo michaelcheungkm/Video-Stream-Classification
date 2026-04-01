@@ -137,6 +137,7 @@
 
     let intervalId = null;
     let sent = 0;
+    let serverUrl = '';
 
     async function sendFrame() {
       canvas.width  = video.videoWidth;
@@ -148,7 +149,7 @@
 
       const b64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
       try {
-        await fetch(document.getElementById('url').value.trim(), {
+        await fetch(serverUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ frame: b64 }),
@@ -166,6 +167,7 @@
         await video.play();
       } catch { alert('Camera denied'); return; }
 
+      serverUrl = document.getElementById('url').value.trim();
       sent = 0;
       const ms = Math.round(1000 / (parseInt(document.getElementById('fps').value) || 10));
       intervalId = setInterval(sendFrame, ms);
