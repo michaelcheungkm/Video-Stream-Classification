@@ -23,9 +23,22 @@
       position: fixed;
       inset: 0;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
+      gap: 10px;
       z-index: 10;
+    }
+
+    #overlay input {
+      background: #222;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 5px 8px;
+      font-family: monospace;
+      font-size: 12px;
+      width: 260px;
+      text-align: center;
     }
 
     #btn-start {
@@ -58,17 +71,15 @@
       flex-wrap: wrap;
     }
 
-    input {
+    #fps {
       background: #222;
       border: 1px solid #444;
       color: #fff;
       padding: 3px 6px;
       font-family: monospace;
       font-size: 12px;
+      width: 40px;
     }
-
-    #url { width: 180px; }
-    #fps { width: 40px; }
 
     #btn-stop {
       font-family: monospace;
@@ -91,7 +102,6 @@
         position: fixed;
         bottom: 0; left: 0;
       }
-      /* overlay stays fixed to the actual screen, not the rotated body */
       #overlay {
         width: 100vw;
         height: 100vh;
@@ -102,6 +112,7 @@
 </head>
 <body>
   <div id="overlay">
+    <input id="url" type="text" value="http://localhost:5050/frame" spellcheck="false" />
     <button id="btn-start">Start</button>
   </div>
 
@@ -110,7 +121,6 @@
 
   <div id="bar">
     <button id="btn-stop">Stop</button>
-    <input id="url" type="text" value="http://localhost:5050/frame" spellcheck="false" />
     <input id="fps" type="number" min="1" max="30" value="10" />
     <span id="status">streaming</span>
   </div>
