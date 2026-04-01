@@ -15,6 +15,14 @@ import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
+from rembg import remove, new_session
+
+import logging
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
+_session = new_session()
+
 # ── Constants ─────────────────────────────────────────────────────────
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 SOUND_CONFIDENCE_THRESHOLD = 0.50
@@ -94,6 +102,18 @@ def play_sound(label):
 
 # ── Image helpers ─────────────────────────────────────────────────────
 def preprocess(img, alpha=2, beta=10):
+    # Remove background (returns BGRA image with transparent background)
+    no_bg = remove(img, session=_session)
+
+    # Composite onto a white background so convertScaleAbs works correctly
+    if no_bg.shape[2] == 4:
+        alpha_mask = no_bg[:, :, 3:4] / 255.0
+        bgr = no_bg[:, :, :3].astype(np.float32)
+        white_bg = np.ones_like(bgr) * 255
+        img = (bgr * alpha_mask + white_bg * (1 - alpha_mask)).astype(np.uint8)
+    else:
+        img = no_bg
+
     return cv2.convertScaleAbs(img, alpha=alpha, beta=beta)
 
 
@@ -289,7 +309,7 @@ def run_live_mode_webapp(
                     print(f"frame {frame_index}: detection paused (sound playing)")
                 else:
                     tag = f"webapp_frame{frame_index}_{int(time.time() * 1000)}"
-                    detect_and_classify(frame, source_tag=tag, padding=padding)
+                    detect_and_classify(preprocess(frame), source_tag=tag, padding=padding)
 
             if display:
                 cv2.imshow("Live Face Detection (press q to quit)", frame)
