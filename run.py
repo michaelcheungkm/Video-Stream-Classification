@@ -9,6 +9,12 @@ import cv2
 from huggingface_hub import hf_hub_download
 from ultralytics import YOLO
 
+import threading
+import base64
+import numpy as np
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
 # ── Constants ─────────────────────────────────────────────────────────
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 SOUND_CONFIDENCE_THRESHOLD = 0.50
@@ -202,6 +208,99 @@ def run_live_mode(camera_index=0, sample_interval=0.5, padding=0.25, display=Tru
 
     print("Live mode stopped.")
 
+# --- Shared state ---
+_latest_frame = None
+_frame_lock = threading.Lock()
+
+flask_app = Flask(__name__)
+CORS(flask_app, origins="*")
+
+@flask_app.route("/frame", methods=["POST", "OPTIONS"])
+def receive_frame():
+    if request.method == "OPTIONS":
+        response = jsonify({})
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        return response, 200
+
+    global _latest_frame
+    data = request.get_json(force=True)
+    b64 = data.get("frame", "")
+    if not b64:
+        return jsonify({"error": "no frame"}), 400
+
+    img_bytes = base64.b64decode(b64)
+    arr = np.frombuffer(img_bytes, dtype=np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if frame is None:
+        return jsonify({"error": "decode failed"}), 400
+
+    with _frame_lock:
+        _latest_frame = frame
+
+    response = jsonify({"ok": True})
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
+
+def start_frame_server(host="0.0.0.0", port=5050):
+    """Start the Flask receiver in a daemon thread."""
+    t = threading.Thread(
+        target=lambda: flask_app.run(host=host, port=port, debug=False, use_reloader=False),
+        daemon=True,
+    )
+    t.start()
+    print(f"Frame server listening on {host}:{port}")
+
+
+def run_live_mode_webapp(
+    sample_interval=0.5,
+    padding=0.25,
+    display=True,
+    server_host="0.0.0.0",
+    server_port=5050,
+):
+    if sample_interval <= 0:
+        raise ValueError("sample_interval must be > 0")
+
+    start_frame_server(host=server_host, port=server_port)
+    print(f"Live mode started (webapp feed, interval={sample_interval}s). Press 'q' to quit.")
+
+    frame_index = 0
+    next_sample_time = time.monotonic()
+
+    try:
+        while True:
+            with _frame_lock:
+                frame = _latest_frame.copy() if _latest_frame is not None else None
+
+            if frame is None:
+                time.sleep(0.05)
+                continue
+
+            frame_index += 1
+            now = time.monotonic()
+
+            if now >= next_sample_time:
+                next_sample_time = now + sample_interval
+
+                if is_sound_playing():
+                    print(f"frame {frame_index}: detection paused (sound playing)")
+                else:
+                    tag = f"webapp_frame{frame_index}_{int(time.time() * 1000)}"
+                    detect_and_classify(frame, source_tag=tag, padding=padding)
+
+            if display:
+                cv2.imshow("Live Face Detection (press q to quit)", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    finally:
+        if display:
+            cv2.destroyAllWindows()
+
+    print("Live mode stopped.")
+
 
 # ── CLI ──────────────────────────────────────────────────────────────
 def main():
@@ -209,7 +308,7 @@ def main():
         description="Face detection + race classification for images or live video."
     )
     parser.add_argument(
-        "--mode", choices=["images", "live"], default="images",
+        "--mode", choices=["images", "live", "web"], default="images",
         help="Run image-folder processing or live video processing.",
     )
     parser.add_argument(
@@ -236,6 +335,14 @@ def main():
             sample_interval=args.sample_interval,
             padding=args.padding,
             display=not args.no_display,
+        )
+    elif args.mode == "web":
+        run_live_mode_webapp(
+            sample_interval=0.5,
+            padding=0.25,
+            display=True,
+            server_host="0.0.0.0",
+            server_port=5050,
         )
     else:
         run_images_mode(padding=args.padding)
