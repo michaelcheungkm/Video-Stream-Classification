@@ -1,87 +1,245 @@
+import argparse
+import random
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+import cv2
 from huggingface_hub import hf_hub_download
 from ultralytics import YOLO
-from pathlib import Path
-import cv2
 
-# ── Download / load model ──────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+SOUND_CONFIDENCE_THRESHOLD = 0.50
+
+CLASS_TO_TRACK = {
+    "Black": "black.mp3",
+    "East Asian": "East_Asian.mp3",
+    "Indian": "indian.mp3",
+    "Latino_Hispanic": "Latino_Hispanic.mp3",
+    "Middle Eastern": "Middle Eastern.mp3",
+    "Southeast Asian": "Southeast Asian.mp3",
+    "White": "white.mp3",
+}
+
+# ── Directories ───────────────────────────────────────────────────────
+IMAGE_DIR = Path("images")
+OUTPUT_DIR = Path("output")
+MUSIC_DIR = Path("music")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# ── Model + face detector ─────────────────────────────────────────────
 model_path = hf_hub_download(
     repo_id="Anzhc/Race-Classification-FairFace-YOLOv8",
-    filename="Race-CLS-FairFace_yolov8s.pt"
+    filename="Race-CLS-FairFace_yolov8s.pt",
 )
 model = YOLO(model_path)
 
-# ── Load OpenCV face detector ──────────────────────────────────────────
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+)
 
-# ── Folders ────────────────────────────────────────────────────────────
-image_dir = Path("images")
-output_dir = Path("output")
-output_dir.mkdir(exist_ok=True)
+# ── Audio state ───────────────────────────────────────────────────────
+_sound_process = None
 
-# ── Preprocessing ──────────────────────────────────────────────────────
+
+def is_sound_playing():
+    return _sound_process is not None and _sound_process.poll() is None
+
+
+def _resolve_track(filename):
+    path = MUSIC_DIR / filename
+    if path.exists():
+        return path
+
+    target = filename.lower()
+    for candidate in MUSIC_DIR.glob("*.mp3"):
+        if candidate.name.lower() == target:
+            return candidate
+    return None
+
+
+def play_sound(label):
+    global _sound_process
+
+    if is_sound_playing() or shutil.which("afplay") is None:
+        return
+
+    track_name = CLASS_TO_TRACK.get(label)
+    track = _resolve_track(track_name) if track_name else None
+
+    if track is None:
+        all_tracks = list(MUSIC_DIR.glob("*.mp3"))
+        if not all_tracks:
+            return
+        track = random.choice(all_tracks)
+
+    try:
+        _sound_process = subprocess.Popen(
+            ["afplay", str(track)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(f"Playing sound: {track.name}")
+    except OSError as exc:
+        print(f"Could not play sound {track.name}: {exc}")
+
+
+# ── Image helpers ─────────────────────────────────────────────────────
 def preprocess(img, alpha=2, beta=10):
-    # alpha = contrast (1.0 is unchanged), beta = brightness (0 is unchanged)
     return cv2.convertScaleAbs(img, alpha=alpha, beta=beta)
 
-def detect_and_classify(image_path, padding=0.25):
-    img = cv2.imread(str(image_path))
-    if img is None:
-        print(f"Could not read {image_path}")
-        return
 
-    img = preprocess(img)
+def detect_faces(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    h, w = img.shape[:2]
-
-    faces = face_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(40, 40)
+    return face_cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
     )
 
+
+def crop_face(img, x, y, fw, fh, padding=0.25):
+    h, w = img.shape[:2]
+    pad_x, pad_y = int(fw * padding), int(fh * padding)
+    x1 = max(0, x - pad_x)
+    y1 = max(0, y - pad_y)
+    x2 = min(w, x + fw + pad_x)
+    y2 = min(h, y + fh + pad_y)
+    return img[y1:y2, x1:x2]
+
+
+# ── Core detect + classify ───────────────────────────────────────────
+def detect_and_classify(img, source_tag, padding=0.25):
+    faces = detect_faces(img)
     if len(faces) == 0:
-        print(f"{image_path.name}: no faces detected")
+        print(f"{source_tag}: no faces detected")
         return
 
-    results_out = []
+    results = []
 
     for i, (x, y, fw, fh) in enumerate(faces):
-        # Add padding around the face
-        pad_x = int(fw * padding)
-        pad_y = int(fh * padding)
-        x1 = max(0, x - pad_x)
-        y1 = max(0, y - pad_y)
-        x2 = min(w, x + fw + pad_x)
-        y2 = min(h, y + fh + pad_y)
+        face_img = crop_face(img, x, y, fw, fh, padding)
 
-        face_crop = img[y1:y2, x1:x2]
-
-        # Pipe into YOLO classifier
-        results = model(face_crop, verbose=False)
-        r = results[0]
+        r = model(face_img, verbose=False)[0]
         label = model.names[r.probs.top1]
         conf = float(r.probs.top1conf)
+        results.append((label, conf))
 
-        results_out.append((label, conf))
-        print(f"{image_path.name} face {i+1}: {label} ({conf:.2f})")
+        print(f"{source_tag} face {i + 1}: {label} ({conf:.2f})")
+        print(f"Label detected: {label}")
 
-        # Save cropped face to output folder
-        crop_path = output_dir / f"{image_path.stem}_face{i+1}.jpg"
-        cv2.imwrite(str(crop_path), face_crop)
+        if conf > SOUND_CONFIDENCE_THRESHOLD:
+            play_sound(label)
 
-    # Write results to .txt sidecar in output folder
-    txt_path = output_dir / image_path.with_suffix(".txt").name
-    with open(txt_path, "a") as f:
-        for label, conf in results_out:
+        crop_path = OUTPUT_DIR / f"{source_tag}_face{i + 1}.jpg"
+        cv2.imwrite(str(crop_path), face_img)
+
+    txt_path = OUTPUT_DIR / f"{source_tag}.txt"
+    with open(txt_path, "a", encoding="utf-8") as f:
+        for label, conf in results:
             f.write(f"{label} {conf:.4f}\n")
 
-# ── Run on images folder ───────────────────────────────────────────────
-image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-images = [p for p in image_dir.iterdir() if p.suffix.lower() in image_extensions]
-print(f"Found {len(images)} images\n")
 
-for img_path in images:
-    detect_and_classify(img_path)
+# ── Mode runners ─────────────────────────────────────────────────────
+def run_images_mode(padding=0.25):
+    images = [p for p in IMAGE_DIR.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS]
+    print(f"Found {len(images)} images\n")
 
-print("\nDone!")
+    for path in images:
+        img = cv2.imread(str(path))
+        if img is None:
+            print(f"Could not read {path}")
+            continue
+        detect_and_classify(preprocess(img), source_tag=path.stem, padding=padding)
+
+    print("\nDone!")
+
+
+def run_live_mode(camera_index=0, sample_interval=0.5, padding=0.25, display=True):
+    if sample_interval <= 0:
+        raise ValueError("sample_interval must be > 0")
+
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        print(f"Could not open camera index: {camera_index}")
+        return
+
+    print(
+        f"Live mode started (camera={camera_index}, interval={sample_interval}s). "
+        "Press 'q' to quit."
+    )
+
+    frame_index = 0
+    next_sample_time = time.monotonic()
+
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                print("Failed to read frame. Stopping.")
+                break
+
+            frame_index += 1
+            now = time.monotonic()
+
+            if now >= next_sample_time:
+                next_sample_time = now + sample_interval
+
+                if is_sound_playing():
+                    print(f"frame {frame_index}: detection paused (sound playing)")
+                else:
+                    tag = f"live_frame{frame_index}_{int(time.time() * 1000)}"
+                    detect_and_classify(frame, source_tag=tag, padding=padding)
+
+            if display:
+                cv2.imshow("Live Face Detection (press q to quit)", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    finally:
+        cap.release()
+        if display:
+            cv2.destroyAllWindows()
+
+    print("Live mode stopped.")
+
+
+# ── CLI ──────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(
+        description="Face detection + race classification for images or live video."
+    )
+    parser.add_argument(
+        "--mode", choices=["images", "live"], default="images",
+        help="Run image-folder processing or live video processing.",
+    )
+    parser.add_argument(
+        "--sample-interval", type=float, default=0.5,
+        help="Seconds between samples in live mode.",
+    )
+    parser.add_argument(
+        "--camera-index", type=int, default=0,
+        help="Device camera index for live mode.",
+    )
+    parser.add_argument(
+        "--padding", type=float, default=0.25,
+        help="Padding ratio around detected face crop.",
+    )
+    parser.add_argument(
+        "--no-display", action="store_true",
+        help="Disable live preview window.",
+    )
+    args = parser.parse_args()
+
+    if args.mode == "live":
+        run_live_mode(
+            camera_index=args.camera_index,
+            sample_interval=args.sample_interval,
+            padding=args.padding,
+            display=not args.no_display,
+        )
+    else:
+        run_images_mode(padding=args.padding)
+
+
+if __name__ == "__main__":
+    main()
